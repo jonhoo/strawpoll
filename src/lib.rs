@@ -223,23 +223,24 @@ mod tests {
     #[test]
     fn it_only_polls_when_needed() {
         let (tx, rx) = oneshot::channel();
-        let mut rx = spawn(Strawpoll::new(TrackPolls::new(rx)));
+        let mut rx = spawn(Strawpoll::from(TrackPolls::new(rx)));
         assert_pending!(rx.poll());
         assert_pending!(rx.poll());
         assert_pending!(rx.poll());
         // one poll must go through to register the underlying future
         // but the _other_ calls to poll should do nothing, since no notify has happened
         assert_eq!(rx.npolls, 1);
+        rx.npolls = 0;
         tx.send(()).unwrap();
         assert_ready!(rx.poll()).unwrap();
         // now there _was_ a notify, so the inner poll _should_ be called
-        assert_eq!(rx.npolls, 2);
+        assert_eq!(rx.npolls, 1);
     }
 
     #[test]
     fn it_handles_changing_wakers() {
         let (tx, rx) = oneshot::channel();
-        let mut rx = spawn(Strawpoll::new(TrackPolls::new(rx)));
+        let mut rx = spawn(Strawpoll::from(TrackPolls::new(rx)));
         assert_pending!(rx.poll());
         assert_pending!(rx.poll());
         assert_eq!(rx.npolls, 1);
