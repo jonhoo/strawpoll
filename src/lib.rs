@@ -28,18 +28,16 @@ impl<F> Strawpoll<F> {
         // safety: we will not move F
         let this = unsafe { self.get_unchecked_mut() };
 
-        if this.waker.is_none() {
+        if this.waker.is_none() || !cx.waker().will_wake(&this.waker.as_deref().unwrap().real) {
             this.waker = Some(Arc::new(TrackWake {
                 real: cx.waker().clone(),
                 awoken: AtomicBool::new(true),
-            }))
+            }));
         }
+
         let waker = this.waker.as_ref().unwrap();
         if !waker.awoken.swap(false, SeqCst) {
             return Poll::Pending;
-        }
-        if !cx.waker().will_wake(&waker.real) {
-            todo!();
         }
 
         // safety: we are already pinned, and caller has no way to move us (or F) once we've
@@ -142,5 +140,26 @@ mod tests {
         assert_ready!(rx.poll()).unwrap();
         // now there _was_ a notify, so the inner poll _should_ be called
         assert_eq!(rx.n, 2);
+    }
+
+    #[test]
+    fn it_handles_changing_wakers() {
+        let (tx, rx) = oneshot::channel();
+        let mut rx = spawn(Strawpoll::new(TrackPolls::new(rx)));
+        assert_pending!(rx.poll());
+        assert_pending!(rx.poll());
+        assert_eq!(rx.n, 1);
+        // change wakers
+        let mut rx = spawn(rx.into_inner());
+        assert_pending!(rx.poll());
+        assert_pending!(rx.poll());
+        // after the waker changs, we _must_ poll again to register with the new waker
+        assert_eq!(rx.n, 2);
+        // change wakers again and wake
+        let mut rx = spawn(rx.into_inner());
+        tx.send(()).unwrap();
+        assert_ready!(rx.poll()).unwrap();
+        // now there _was_ a notify, so the inner poll _should_ be called
+        assert_eq!(rx.n, 3);
     }
 }
