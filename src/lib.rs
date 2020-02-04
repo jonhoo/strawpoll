@@ -121,7 +121,7 @@ impl<F> Strawpoll<F> {
         let this = unsafe { self.get_unchecked_mut() };
 
         let cx_waker = cx.waker();
-        if this.waker.is_none() || !cx_waker.will_wake(&this.waker.as_deref().unwrap().real) {
+        if this.waker.is_none() || !cx_waker.will_wake(&this.waker.as_ref().unwrap().real) {
             this.waker = Some(Arc::new(TrackWake {
                 real: cx_waker.clone(),
                 awoken: AtomicBool::new(true),
