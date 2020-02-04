@@ -89,6 +89,9 @@ use std::{
 pub struct Strawpoll<F> {
     future: F,
     waker: Option<Arc<TrackWake>>,
+    was_ready: bool,
+    #[cfg(test)]
+    npolls: usize,
 }
 
 impl<F> From<F> for Strawpoll<F> {
@@ -103,6 +106,9 @@ impl<F> Strawpoll<F> {
         Self {
             future: f,
             waker: None,
+            was_ready: true,
+            #[cfg(test)]
+            npolls: 0,
         }
     }
 
@@ -113,9 +119,9 @@ impl<F> Strawpoll<F> {
     ///  - `F` has never been polled; or
     ///  - `cx` contains a new waker; or
     ///  - `F` was woken up.
-    pub fn poll_fn<P, R>(self: Pin<&mut Self>, cx: &mut Context<'_>, poll_fn: P) -> Poll<R>
+    pub fn poll_fn<P, R>(self: Pin<&mut Self>, cx: &mut Context<'_>, mut poll_fn: P) -> Poll<R>
     where
-        P: FnOnce(Pin<&mut F>, &mut Context<'_>) -> Poll<R>,
+        P: FnMut(Pin<&mut F>, &mut Context<'_>) -> Poll<R>,
     {
         // safety: we will not move F
         let this = unsafe { self.get_unchecked_mut() };
@@ -129,16 +135,39 @@ impl<F> Strawpoll<F> {
         }
 
         let waker = this.waker.as_ref().unwrap();
-        if !waker.awoken.swap(false, SeqCst) {
+        let was_woken = waker.awoken.compare_and_swap(true, false, SeqCst);
+        if !this.was_ready && !was_woken {
             return Poll::Pending;
         }
+        this.was_ready = false;
 
         // safety: we are already pinned, and caller has no way to move us (or F) once we've
         // reached this point unless F: Unpin.
-        let fpin = unsafe { Pin::new_unchecked(&mut this.future) };
+        let mut fpin = unsafe { Pin::new_unchecked(&mut this.future) };
         let wref = futures_task::waker_ref(waker);
         let mut cx = Context::from_waker(&*wref);
-        poll_fn(fpin, &mut cx)
+        loop {
+            #[cfg(test)]
+            {
+                this.npolls += 1;
+            }
+
+            match poll_fn(fpin.as_mut(), &mut cx) {
+                Poll::Ready(r) => {
+                    // ensure that we poll at least once more
+                    this.was_ready = true;
+                    return Poll::Ready(r);
+                }
+                Poll::Pending => {
+                    // just in case -- check if we raced and should wake up again immediately
+                    if waker.awoken.compare_and_swap(true, false, SeqCst) == true {
+                        // someone woke us up while we polled -- poll again!
+                        continue;
+                    }
+                    return Poll::Pending;
+                }
+            }
+        }
     }
 }
 
@@ -183,38 +212,13 @@ impl futures_task::ArcWake for TrackWake {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::oneshot;
-    use tokio_test::{assert_pending, assert_ready, task::spawn};
-
-    struct TrackPolls<F> {
-        npolls: usize,
-        f: F,
-    }
-
-    impl<F> TrackPolls<F> {
-        fn new(f: F) -> Self {
-            Self { npolls: 0, f }
-        }
-    }
-
-    impl<F> Future for TrackPolls<F>
-    where
-        F: Future,
-    {
-        type Output = F::Output;
-        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            // safety: we do not move f
-            let this = unsafe { self.get_unchecked_mut() };
-            this.npolls += 1;
-            // safety: we are pinned, and so is f
-            unsafe { Pin::new_unchecked(&mut this.f) }.poll(cx)
-        }
-    }
+    use tokio::sync::{mpsc, oneshot};
+    use tokio_test::{assert_pending, assert_ready, assert_ready_eq, task::spawn};
 
     #[test]
     fn it_resolves() {
         let (tx, rx) = oneshot::channel();
-        let mut rx = spawn(TrackPolls::new(rx));
+        let mut rx = spawn(Strawpoll::from(rx));
         assert_pending!(rx.poll());
         tx.send(()).unwrap();
         assert_ready!(rx.poll()).unwrap();
@@ -223,7 +227,7 @@ mod tests {
     #[test]
     fn it_only_polls_when_needed() {
         let (tx, rx) = oneshot::channel();
-        let mut rx = spawn(Strawpoll::from(TrackPolls::new(rx)));
+        let mut rx = spawn(Strawpoll::from(rx));
         assert_pending!(rx.poll());
         assert_pending!(rx.poll());
         assert_pending!(rx.poll());
@@ -238,9 +242,36 @@ mod tests {
     }
 
     #[test]
+    fn multi_ready() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut rx = spawn(Strawpoll::from(rx));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+        // one poll must go through to register the underlying future
+        // but the _other_ calls to poll should do nothing, since no notify has happened
+        assert_eq!(rx.npolls, 1);
+        tx.send(()).unwrap();
+        tx.send(()).unwrap();
+        assert_ready_eq!(
+            rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))),
+            Some(())
+        );
+        assert_ready_eq!(
+            rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))),
+            Some(())
+        );
+        assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+        // now there _was_ a notify, so the inner poll _should_ be called
+        // and it should be called up to and including we get our first pending
+        assert_eq!(rx.npolls, 4);
+    }
+
+    #[test]
     fn it_handles_changing_wakers() {
         let (tx, rx) = oneshot::channel();
-        let mut rx = spawn(Strawpoll::from(TrackPolls::new(rx)));
+        let mut rx = spawn(Strawpoll::from(rx));
         assert_pending!(rx.poll());
         assert_pending!(rx.poll());
         assert_eq!(rx.npolls, 1);
