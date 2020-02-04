@@ -1,12 +1,12 @@
 [package]
 name = "strawpoll"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2018"
 authors = ["Jon Gjengset <jon@thesquareplanet.com>"]
 license = "MIT OR Apache-2.0"
 
 readme = "README.md"
-description = "Wrapper to avoid spurious polling"
+description = "A wrapper to avoid spurious polling."
 repository = "https://github.com/jonhoo/strawpoll.git"
 
 keywords = ["futures", "tokio"]

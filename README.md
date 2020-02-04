@@ -3,6 +3,10 @@
 [![Build Status](https://dev.azure.com/jonhoo/jonhoo/_apis/build/status/strawpoll?branchName=master)](https://dev.azure.com/jonhoo/jonhoo/_build/latest?definitionId=16&branchName=master)
 [![Codecov](https://codecov.io/github/jonhoo/strawpoll/coverage.svg?branch=master)](https://codecov.io/gh/jonhoo/strawpoll)
 
+---
+
+Strawpoll — a wrapper to avoid spurious polling.
+
 Sometimes, you have a future that itself contains smaller futures. When
 the larger future is polled, it polls those child futures to see if any
 of them have made progress. This can be inefficient if polling such a

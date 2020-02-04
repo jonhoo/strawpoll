@@ -1,4 +1,4 @@
-//! Conservative polling wrapper.
+//! A wrapper to avoid spurious polling.
 //!
 //! Sometimes, you have a future that itself contains smaller futures. When the larger future is
 //! polled, it polls those child futures to see if any of them have made progress. This can be
