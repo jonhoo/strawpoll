@@ -1,0 +1,14 @@
+[package]
+name = "strawpoll"
+version = "0.1.0"
+authors = ["Jon Gjengset <jon@thesquareplanet.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+futures-task = "0.3"
+
+[dev-dependencies]
+tokio-test = "0.2"
+tokio = { version = "0.2", features = ["sync"] }
