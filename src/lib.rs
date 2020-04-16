@@ -146,6 +146,7 @@ impl<F> Strawpoll<F> {
         let mut fpin = unsafe { Pin::new_unchecked(&mut this.future) };
         let wref = futures_task::waker_ref(waker);
         let mut cx = Context::from_waker(&*wref);
+        let mut twice = false;
         loop {
             #[cfg(test)]
             {
@@ -161,8 +162,16 @@ impl<F> Strawpoll<F> {
                 Poll::Pending => {
                     // just in case -- check if we raced and should wake up again immediately
                     if waker.awoken.compare_and_swap(true, false, SeqCst) == true {
-                        // someone woke us up while we polled -- poll again!
-                        continue;
+                        if !twice {
+                            // someone woke us up while we polled -- poll again!
+                            twice = true;
+                            continue;
+                        } else {
+                            // fool me once...
+                            // we've probably just run out of budget and need to yield.
+                            // (https://tokio.rs/blog/2020-04-preemption/)
+                            waker.awoken.store(true, SeqCst);
+                        }
                     }
                     return Poll::Pending;
                 }
