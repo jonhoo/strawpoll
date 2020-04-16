@@ -155,7 +155,9 @@ impl<F> Strawpoll<F> {
 
             match poll_fn(fpin.as_mut(), &mut cx) {
                 Poll::Ready(r) => {
-                    // ensure that we poll at least once more
+                    // we want to allow polling after a future is ready to support futures that can
+                    // be "reset", like timers. we do this by keeping track of when we return ready
+                    // and bypass the `was_awoken` check the next time `poll_fn` is called.
                     this.was_ready = true;
                     return Poll::Ready(r);
                 }
@@ -170,6 +172,8 @@ impl<F> Strawpoll<F> {
                             // fool me once...
                             // we've probably just run out of budget and need to yield.
                             // (https://tokio.rs/blog/2020-04-preemption/)
+                            // we don't need to call .wake() since
+                            // whatever set this to true already did.
                             waker.awoken.store(true, SeqCst);
                         }
                     }
