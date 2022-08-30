@@ -84,10 +84,12 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+use futures_core::Stream;
+
 /// Polling wrapper that avoids spurious calls to `poll` on `F`.
 #[derive(Debug)]
 pub struct Strawpoll<F> {
-    future: F,
+    inner: F,
     waker: Option<Arc<TrackWake>>,
     was_ready: bool,
     #[cfg(test)]
@@ -104,7 +106,7 @@ impl<F> Strawpoll<F> {
     /// Wrap `f` to avoid spurious polling on it.
     pub fn new(f: F) -> Self {
         Self {
-            future: f,
+            inner: f,
             waker: None,
             was_ready: true,
             #[cfg(test)]
@@ -143,7 +145,7 @@ impl<F> Strawpoll<F> {
 
         // safety: we are already pinned, and caller has no way to move us (or F) once we've
         // reached this point unless F: Unpin.
-        let mut fpin = unsafe { Pin::new_unchecked(&mut this.future) };
+        let mut fpin = unsafe { Pin::new_unchecked(&mut this.inner) };
         let wref = futures_task::waker_ref(waker);
         let mut cx = Context::from_waker(&*wref);
         let mut twice = false;
@@ -187,13 +189,13 @@ impl<F> Strawpoll<F> {
 impl<F> std::ops::Deref for Strawpoll<F> {
     type Target = F;
     fn deref(&self) -> &Self::Target {
-        &self.future
+        &self.inner
     }
 }
 
 impl<F> std::ops::DerefMut for Strawpoll<F> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.future
+        &mut self.inner
     }
 }
 
@@ -204,8 +206,24 @@ where
     F: Future,
 {
     type Output = F::Output;
+
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.poll_fn(cx, |f, cx| f.poll(cx))
+    }
+}
+
+impl<S> Stream for Strawpoll<S>
+where
+    S: Stream,
+{
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.poll_fn(cx, |f, cx| f.poll_next(cx))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
     }
 }
 
@@ -252,6 +270,32 @@ mod tests {
         assert_ready!(rx.poll()).unwrap();
         // now there _was_ a notify, so the inner poll _should_ be called
         assert_eq!(rx.npolls, 1);
+    }
+
+    #[test]
+    fn it_only_polls_when_needed_stream() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut rx = spawn(Strawpoll::from(rx));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+        // one poll must go through to register the underlying future
+        // but the _other_ calls to poll should do nothing, since no notify has happened
+        assert_eq!(rx.npolls, 1);
+
+        for _ in 0..10 {
+            rx.npolls = 0;
+            tx.send(()).unwrap();
+            assert_ready_eq!(
+                rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))),
+                Some(())
+            );
+            assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+            assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+            assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+            // now there _was_ a notify, so the inner poll _should_ be called
+            assert_eq!(rx.npolls, 2);
+        }
     }
 
     #[test]
