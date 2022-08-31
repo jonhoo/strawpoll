@@ -137,7 +137,11 @@ impl<F> Strawpoll<F> {
         }
 
         let waker = this.waker.as_ref().unwrap();
-        let was_woken = waker.take_awoken();
+
+        let was_woken = waker
+            .awoken
+            .compare_exchange(true, false, SeqCst, SeqCst)
+            .unwrap_or_else(|f| f);
 
         if !this.was_ready && !was_woken {
             return Poll::Pending;
@@ -149,41 +153,22 @@ impl<F> Strawpoll<F> {
         let mut fpin = unsafe { Pin::new_unchecked(&mut this.inner) };
         let wref = futures_task::waker_ref(waker);
         let mut cx = Context::from_waker(&*wref);
-        let mut twice = false;
-        loop {
-            #[cfg(test)]
-            {
-                this.npolls += 1;
-            }
 
-            match poll_fn(fpin.as_mut(), &mut cx) {
-                Poll::Ready(r) => {
-                    // we want to allow polling after a future is ready to support futures that can
-                    // be "reset", like timers. we do this by keeping track of when we return ready
-                    // and bypass the `was_woken` check the next time `poll_fn` is called.
-                    this.was_ready = true;
-                    return Poll::Ready(r);
-                }
-                Poll::Pending => {
-                    // just in case -- check if we raced and should wake up again immediately
-                    if waker.take_awoken() {
-                        if !twice {
-                            // someone woke us up while we polled -- poll again!
-                            twice = true;
-                            continue;
-                        } else {
-                            // fool me once...
-                            // we've probably just run out of budget and need to yield.
-                            // (https://tokio.rs/blog/2020-04-preemption/)
-                            // we don't need to call .wake() since
-                            // whatever set this to true already did.
-                            waker.awoken.store(true, SeqCst);
-                        }
-                    }
-                    return Poll::Pending;
-                }
-            }
+        #[cfg(test)]
+        {
+            this.npolls += 1;
         }
+
+        let poll = poll_fn(fpin.as_mut(), &mut cx);
+
+        if poll.is_ready() {
+            // we want to allow polling after a future is ready to support futures that can
+            // be "reset", like timers. we do this by keeping track of when we return ready
+            // and bypass the `was_woken` check the next time `poll_fn` is called.
+            this.was_ready = true;
+        }
+
+        poll
     }
 }
 
@@ -232,15 +217,6 @@ where
 struct TrackWake {
     real: Waker,
     awoken: AtomicBool,
-}
-
-impl TrackWake {
-    /// Returns `true` if it was woken.
-    fn take_awoken(&self) -> bool {
-        self.awoken
-            .compare_exchange(true, false, SeqCst, SeqCst)
-            .unwrap_or_else(|f| f)
-    }
 }
 
 impl futures_task::ArcWake for TrackWake {
