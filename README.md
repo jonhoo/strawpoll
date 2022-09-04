@@ -1,6 +1,5 @@
 [![Crates.io](https://img.shields.io/crates/v/strawpoll.svg)](https://crates.io/crates/strawpoll)
 [![Documentation](https://docs.rs/strawpoll/badge.svg)](https://docs.rs/strawpoll/)
-[![Build Status](https://dev.azure.com/jonhoo/jonhoo/_apis/build/status/strawpoll?branchName=master)](https://dev.azure.com/jonhoo/jonhoo/_build/latest?definitionId=16&branchName=master)
 [![Codecov](https://codecov.io/github/jonhoo/strawpoll/coverage.svg?branch=master)](https://codecov.io/gh/jonhoo/strawpoll)
 
 ---
