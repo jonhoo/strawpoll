@@ -12,11 +12,6 @@ repository = "https://github.com/jonhoo/strawpoll.git"
 keywords = ["futures", "tokio"]
 categories = ["asynchronous", "concurrency"]
 
-[badges]
-azure-devops = { project = "jonhoo/jonhoo", pipeline = "strawpoll", build = "16" }
-codecov = { repository = "jonhoo/strawpoll", branch = "master", service = "github" }
-maintenance = { status = "experimental" }
-
 [dependencies]
 futures-task = "0.3"
 
