@@ -167,6 +167,8 @@ impl<F> Strawpoll<F> {
             this.npolls += 1;
         }
 
+        // `poll_fn` can call `wake()` immediately and, hence, `awoken` can be changed here.
+        // However, we doesn't touch `awoken` until the next polling, so it cannot cause races.
         let poll = poll_fn(fpin.as_mut(), &mut cx);
 
         if poll.is_ready() {
