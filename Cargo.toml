@@ -23,3 +23,7 @@ futures-core = { version = "0.3", optional = true }
 tokio-test = "0.4"
 tokio = { version = "1", features = ["sync"] }
 tokio-stream = "0.1.9"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

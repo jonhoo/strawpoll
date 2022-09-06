@@ -66,6 +66,9 @@
 //! // now there _was_ a notify, so the inner poll _should_ be called
 //! assert_eq!(rx.npolls, 2);
 //! ```
+//!
+//! # Feature flags
+//! * `stream`: Implements `futures::Stream` trait for [`Strawpoll`].
 #![warn(rust_2018_idioms)]
 #![deny(
     missing_docs,
@@ -73,6 +76,7 @@
     unreachable_pub,
     rustdoc::broken_intra_doc_links
 )]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 use std::sync::{
     atomic::{AtomicBool, Ordering::SeqCst},
