@@ -79,7 +79,10 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering::SeqCst},
+    atomic::{
+        AtomicBool,
+        Ordering::{Relaxed, SeqCst},
+    },
     Arc,
 };
 use std::{
@@ -145,7 +148,7 @@ impl<F> Strawpoll<F> {
 
         let was_woken = waker
             .awoken
-            .compare_exchange(true, false, SeqCst, SeqCst)
+            .compare_exchange(true, false, SeqCst, Relaxed)
             .unwrap_or_else(|f| f);
 
         if !this.was_ready && !was_woken {
