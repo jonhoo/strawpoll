@@ -292,6 +292,23 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "stream")]
+    #[test]
+    fn it_propagates_size_hint() {
+        struct SomeStream;
+        impl Stream for SomeStream {
+            type Item = ();
+            fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+                unreachable!();
+            }
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (42, Some(43))
+            }
+        }
+
+        assert_eq!(Strawpoll::new(SomeStream).size_hint(), (42, Some(43)));
+    }
+
     #[test]
     fn multi_ready() {
         let (tx, rx) = mpsc::unbounded_channel();
