@@ -84,6 +84,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+#[cfg(feature = "stream")]
 use futures_core::Stream;
 
 /// Polling wrapper that avoids spurious calls to `poll` on `F`.
@@ -198,6 +199,7 @@ where
     }
 }
 
+#[cfg(feature = "stream")]
 impl<S> Stream for Strawpoll<S>
 where
     S: Stream,
@@ -258,13 +260,15 @@ mod tests {
         assert_eq!(rx.npolls, 1);
     }
 
+    #[cfg(feature = "stream")]
     #[test]
     fn it_only_polls_when_needed_stream() {
         let (tx, rx) = mpsc::unbounded_channel();
+        let rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
         let mut rx = spawn(Strawpoll::from(rx));
-        assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
-        assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
-        assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_next(cx)));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_next(cx)));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_next(cx)));
         // one poll must go through to register the underlying future
         // but the _other_ calls to poll should do nothing, since no notify has happened
         assert_eq!(rx.npolls, 1);
@@ -272,13 +276,10 @@ mod tests {
         for _ in 0..10 {
             rx.npolls = 0;
             tx.send(()).unwrap();
-            assert_ready_eq!(
-                rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))),
-                Some(())
-            );
-            assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
-            assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
-            assert_pending!(rx.enter(|cx, rx| rx.poll_fn(cx, |mut rx, cx| rx.poll_recv(cx))));
+            assert_ready_eq!(rx.enter(|cx, rx| rx.poll_next(cx)), Some(()));
+            assert_pending!(rx.enter(|cx, rx| rx.poll_next(cx)));
+            assert_pending!(rx.enter(|cx, rx| rx.poll_next(cx)));
+            assert_pending!(rx.enter(|cx, rx| rx.poll_next(cx)));
             // now there _was_ a notify, so the inner poll _should_ be called
             assert_eq!(rx.npolls, 2);
         }
