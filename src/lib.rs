@@ -168,7 +168,8 @@ impl<F> Strawpoll<F> {
         }
 
         // `poll_fn` can call `wake()` immediately and, hence, `awoken` can be changed here.
-        // However, we doesn't touch `awoken` until the next polling, so it cannot cause races.
+        // However, by the `Future::poll` contract, it must have called `.wake`, which means
+        // we've called `wake` on _our_ waker, which means we'll be polled again later.
         let poll = poll_fn(fpin.as_mut(), &mut cx);
 
         if poll.is_ready() {
