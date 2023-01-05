@@ -74,7 +74,7 @@
     missing_docs,
     missing_debug_implementations,
     unreachable_pub,
-    rustdoc::broken_intra_doc_links
+    broken_intra_doc_links
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
@@ -160,7 +160,7 @@ impl<F> Strawpoll<F> {
         // reached this point unless F: Unpin.
         let mut fpin = unsafe { Pin::new_unchecked(&mut this.inner) };
         let wref = futures_task::waker_ref(waker);
-        let mut cx = Context::from_waker(&*wref);
+        let mut cx = Context::from_waker(&wref);
 
         #[cfg(test)]
         {
