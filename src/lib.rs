@@ -42,10 +42,10 @@
 //! # {
 //! #     type Output = F::Output;
 //! #     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-//! #         // safety: we do not move f
+//! #         // SAFETY: we do not move f
 //! #         let this = unsafe { self.get_unchecked_mut() };
 //! #         this.npolls += 1;
-//! #         // safety: we are pinned, and so is f
+//! #         // SAFETY: we are pinned, and so is f
 //! #         unsafe { Pin::new_unchecked(&mut this.f) }.poll(cx)
 //! #     }
 //! # }
@@ -66,16 +66,23 @@
 //! // now there _was_ a notify, so the inner poll _should_ be called
 //! assert_eq!(rx.npolls, 2);
 //! ```
+//!
+//! # Feature flags
+//! * `stream`: Implements `futures::Stream` trait for [`Strawpoll`].
 #![warn(rust_2018_idioms)]
 #![deny(
     missing_docs,
     missing_debug_implementations,
     unreachable_pub,
-    intra_doc_link_resolution_failure
+    broken_intra_doc_links
 )]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering::SeqCst},
+    atomic::{
+        AtomicBool,
+        Ordering::{Relaxed, SeqCst},
+    },
     Arc,
 };
 use std::{
@@ -84,10 +91,13 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+#[cfg(feature = "stream")]
+use futures_core::Stream;
+
 /// Polling wrapper that avoids spurious calls to `poll` on `F`.
 #[derive(Debug)]
 pub struct Strawpoll<F> {
-    future: F,
+    inner: F,
     waker: Option<Arc<TrackWake>>,
     was_ready: bool,
     #[cfg(test)]
@@ -104,7 +114,7 @@ impl<F> Strawpoll<F> {
     /// Wrap `f` to avoid spurious polling on it.
     pub fn new(f: F) -> Self {
         Self {
-            future: f,
+            inner: f,
             waker: None,
             was_ready: true,
             #[cfg(test)]
@@ -123,7 +133,7 @@ impl<F> Strawpoll<F> {
     where
         P: FnMut(Pin<&mut F>, &mut Context<'_>) -> Poll<R>,
     {
-        // safety: we will not move F
+        // SAFETY: we will not move F
         let this = unsafe { self.get_unchecked_mut() };
 
         let cx_waker = cx.waker();
@@ -135,65 +145,54 @@ impl<F> Strawpoll<F> {
         }
 
         let waker = this.waker.as_ref().unwrap();
-        let was_woken = waker.awoken.compare_and_swap(true, false, SeqCst);
+
+        let was_woken = waker
+            .awoken
+            .compare_exchange(true, false, SeqCst, Relaxed)
+            .unwrap_or_else(|f| f);
+
         if !this.was_ready && !was_woken {
             return Poll::Pending;
         }
         this.was_ready = false;
 
-        // safety: we are already pinned, and caller has no way to move us (or F) once we've
+        // SAFETY: we are already pinned, and caller has no way to move us (or F) once we've
         // reached this point unless F: Unpin.
-        let mut fpin = unsafe { Pin::new_unchecked(&mut this.future) };
+        let mut fpin = unsafe { Pin::new_unchecked(&mut this.inner) };
         let wref = futures_task::waker_ref(waker);
-        let mut cx = Context::from_waker(&*wref);
-        let mut twice = false;
-        loop {
-            #[cfg(test)]
-            {
-                this.npolls += 1;
-            }
+        let mut cx = Context::from_waker(&wref);
 
-            match poll_fn(fpin.as_mut(), &mut cx) {
-                Poll::Ready(r) => {
-                    // we want to allow polling after a future is ready to support futures that can
-                    // be "reset", like timers. we do this by keeping track of when we return ready
-                    // and bypass the `was_awoken` check the next time `poll_fn` is called.
-                    this.was_ready = true;
-                    return Poll::Ready(r);
-                }
-                Poll::Pending => {
-                    // just in case -- check if we raced and should wake up again immediately
-                    if waker.awoken.compare_and_swap(true, false, SeqCst) == true {
-                        if !twice {
-                            // someone woke us up while we polled -- poll again!
-                            twice = true;
-                            continue;
-                        } else {
-                            // fool me once...
-                            // we've probably just run out of budget and need to yield.
-                            // (https://tokio.rs/blog/2020-04-preemption/)
-                            // we don't need to call .wake() since
-                            // whatever set this to true already did.
-                            waker.awoken.store(true, SeqCst);
-                        }
-                    }
-                    return Poll::Pending;
-                }
-            }
+        #[cfg(test)]
+        {
+            this.npolls += 1;
         }
+
+        // `poll_fn` can call `wake()` immediately and, hence, `awoken` can be changed here.
+        // However, by the `Future::poll` contract, it must have called `.wake`, which means
+        // we've called `wake` on _our_ waker, which means we'll be polled again later.
+        let poll = poll_fn(fpin.as_mut(), &mut cx);
+
+        if poll.is_ready() {
+            // we want to allow polling after a future is ready to support futures that can
+            // be "reset", like timers. we do this by keeping track of when we return ready
+            // and bypass the `was_woken` check the next time `poll_fn` is called.
+            this.was_ready = true;
+        }
+
+        poll
     }
 }
 
 impl<F> std::ops::Deref for Strawpoll<F> {
     type Target = F;
     fn deref(&self) -> &Self::Target {
-        &self.future
+        &self.inner
     }
 }
 
 impl<F> std::ops::DerefMut for Strawpoll<F> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.future
+        &mut self.inner
     }
 }
 
@@ -204,8 +203,25 @@ where
     F: Future,
 {
     type Output = F::Output;
+
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.poll_fn(cx, |f, cx| f.poll(cx))
+    }
+}
+
+#[cfg(feature = "stream")]
+impl<S> Stream for Strawpoll<S>
+where
+    S: Stream,
+{
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.poll_fn(cx, |f, cx| f.poll_next(cx))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
     }
 }
 
@@ -252,6 +268,48 @@ mod tests {
         assert_ready!(rx.poll()).unwrap();
         // now there _was_ a notify, so the inner poll _should_ be called
         assert_eq!(rx.npolls, 1);
+    }
+
+    #[cfg(feature = "stream")]
+    #[test]
+    fn it_only_polls_when_needed_stream() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let rx = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+        let mut rx = spawn(Strawpoll::from(rx));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_next(cx)));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_next(cx)));
+        assert_pending!(rx.enter(|cx, rx| rx.poll_next(cx)));
+        // one poll must go through to register the underlying future
+        // but the _other_ calls to poll should do nothing, since no notify has happened
+        assert_eq!(rx.npolls, 1);
+
+        for _ in 0..10 {
+            rx.npolls = 0;
+            tx.send(()).unwrap();
+            assert_ready_eq!(rx.enter(|cx, rx| rx.poll_next(cx)), Some(()));
+            assert_pending!(rx.enter(|cx, rx| rx.poll_next(cx)));
+            assert_pending!(rx.enter(|cx, rx| rx.poll_next(cx)));
+            assert_pending!(rx.enter(|cx, rx| rx.poll_next(cx)));
+            // now there _was_ a notify, so the inner poll _should_ be called
+            assert_eq!(rx.npolls, 2);
+        }
+    }
+
+    #[cfg(feature = "stream")]
+    #[test]
+    fn it_propagates_size_hint() {
+        struct SomeStream;
+        impl Stream for SomeStream {
+            type Item = ();
+            fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+                unreachable!();
+            }
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (42, Some(43))
+            }
+        }
+
+        assert_eq!(Strawpoll::new(SomeStream).size_hint(), (42, Some(43)));
     }
 
     #[test]
