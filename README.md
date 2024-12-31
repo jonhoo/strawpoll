@@ -1,6 +1,6 @@
 [![Crates.io](https://img.shields.io/crates/v/strawpoll.svg)](https://crates.io/crates/strawpoll)
 [![Documentation](https://docs.rs/strawpoll/badge.svg)](https://docs.rs/strawpoll/)
-[![Codecov](https://codecov.io/github/jonhoo/strawpoll/coverage.svg?branch=master)](https://codecov.io/gh/jonhoo/strawpoll)
+[![codecov](https://codecov.io/gh/jonhoo/strawpoll/graph/badge.svg?token=jU5cOhucOv)](https://codecov.io/gh/jonhoo/strawpoll)
 
 ---
 
