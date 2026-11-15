@@ -2,6 +2,7 @@
 name = "strawpoll"
 version = "0.2.3"
 edition = "2018"
+rust-version = "1.51.0"
 authors = ["Jon Gjengset <jon@thesquareplanet.com>"]
 license = "MIT OR Apache-2.0"
 
